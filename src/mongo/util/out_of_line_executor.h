@@ -34,6 +34,11 @@
 
 namespace mongo {
 
+/*
+ * 整体说来OutOfLineExecutor定义了顶层执行器的接口。
+ * 最关键的接口为schedule，用于执行一个task
+ */
+
 /**
  * Provides the minimal api for a simple out of line executor that can run non-cancellable
  * callbacks.

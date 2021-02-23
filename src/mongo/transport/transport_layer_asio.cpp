@@ -137,12 +137,19 @@ private:
     std::shared_ptr<asio::system_timer> _timer;
 };
 
+/*
+ * 整体说来ASIOReactor是对asio::io_context的封装
+ */
 class TransportLayerASIO::ASIOReactor final : public Reactor {
 public:
     ASIOReactor() : _ioContext() {}
 
     void run() noexcept override {
         ThreadIdGuard threadIdGuard(this);
+        /*
+         * 关于io_context::work, 参见：https://www.boost.org/doc/libs/1_66_0/doc/html/boost_asio/reference/io_context__work.html
+         * ？？？？？ 
+         */
         asio::io_context::work work(_ioContext);
         _ioContext.run();
     }
@@ -184,7 +191,9 @@ public:
     bool onReactorThread() const override {
         return this == _reactorForThread;
     }
-
+    /*
+     * 类型转换运算，参见：C++ primier第五版，514页 
+     */
     operator asio::io_context&() {
         return _ioContext;
     }
@@ -202,7 +211,7 @@ private:
     };
 
     static thread_local ASIOReactor* _reactorForThread;
-
+    /* 每一个ASIOReactor持有一个io_context对象 */
     asio::io_context _ioContext;
 };
 
@@ -768,6 +777,31 @@ Status TransportLayerASIO::setup() {
     return Status::OK();
 }
 
+/*
+ * 首先澄清一些关于asio的知识：
+ * 0. io_context: 负责和操作系统打交道，等待所有异步操作的结束，然后为每一个异步操作调用其完成处理程序。
+ * 1. 一个io_context就对应一个epoll loop
+ * 2. 线程通过io_context.run()来绑定io_context在当前线程中执行
+ * 2. 如果单个线程绑定单个io_context对象，那么当前线程会根据注册在io_context的事件的发生的时间顺序，串行地运行对应的回调handler，执行完成后退出
+ * 3. 如果多个线程绑定单个io_context对象，那么多个线程会并发地执行触发的事件，执行完成后退出
+ * 4. 如果有多个io_context对象，那就表示有多个epoll loop
+ * 以上，参见：https://blog.csdn.net/caoshangpa/article/details/79233059
+ * 
+ * _runListener是listener线程的执行函数，listener线程绑定了_acceptorReactor对应的io_context。该io_context只注册了async_accept事件，当有
+ * 用户连接接入时，listener线程会调用注册的回调函数。注册的回调函数是在_acceptConnection函数中定义的lambda函数。
+ * 
+ * 这个函数是监听线程的开始函数, 由TransportLayerASIO::start()触发
+ * 该函数的主要流程如下：
+ * 1. 遍历所有的acceptor，对于每个acceptor调_acceptConnection
+ *    根据单步跟踪，发现acceptor有两个，它们的地址分别是：
+ *    /tmp/mongodb-55271.sock和0.0.0.0:55271
+ * 2. 激活_listener, 并notify其他线程
+ * 3. _acceptorReactor->run(), 监听开始,
+ * 4. 上一步会持续阻塞，直到进程退出，进程退出后，该函数会做一些清理工作
+ * 
+ * TODO:
+ * 1. _acceptConnection
+ */
 void TransportLayerASIO::_runListener() noexcept {
     setThreadName("listener");
 
@@ -775,9 +809,14 @@ void TransportLayerASIO::_runListener() noexcept {
     if (_isShutdown) {
         return;
     }
-
+    /*
+     * std::vector<std::pair<SockAddr, GenericAcceptor>> _acceptors;
+     * using GenericAcceptor = asio::basic_socket_acceptor<asio::generic::stream_protocol>; 
+     * 每个acceptor对象在TransportLayerASIO::setup()函数初始化，并且每个acceptor对象绑定的io_context对象是_acceptorReactor
+     */
     for (auto& acceptor : _acceptors) {
         asio::error_code ec;
+        /* 参见：https://www.boost.org/doc/libs/1_66_0/doc/html/boost_asio/reference/basic_socket_acceptor/listen/overload1.html */
         acceptor.second.listen(serverGlobalParams.listenBacklog, ec);
         if (ec) {
             severe() << "Error listening for new connections on " << acceptor.first << ": "
@@ -786,6 +825,7 @@ void TransportLayerASIO::_runListener() noexcept {
         }
 
         _acceptConnection(acceptor.second);
+        log() << acceptor.first.toString();
         log() << "Listening on " << acceptor.first.getAddr();
     }
 
@@ -825,6 +865,16 @@ void TransportLayerASIO::_runListener() noexcept {
         }
     }
 }
+
+/*
+ * 该函数在mongos启动的时候调用，调用栈如下：
+#0  mongo::transport::TransportLayerASIO::start (this=0x7ffff1dab3a0) at src/mongo/transport/transport_layer_asio.cpp:836
+#1  0x00005555575bda27 in mongo::transport::TransportLayerManager::start (this=0x7ffff198d880) at src/mongo/transport/transport_layer_manager.cpp:84
+#2  0x000055555703afa8 in mongo::(anonymous namespace)::runMongosServer (serviceContext=0x7ffff1dadfe0) at src/mongo/s/server.cpp:614
+#3  0x000055555703b774 in mongo::(anonymous namespace)::main (serviceContext=0x7ffff1dadfe0) at src/mongo/s/server.cpp:689
+#4  0x000055555703bade in mongo::(anonymous namespace)::mongoSMain (argc=3, argv=0x7fffffffdee8, envp=0x7fffffffdf08) at src/mongo/s/server.cpp:764
+#5  0x000055555703be37 in main (argc=3, argv=0x7fffffffdee8, envp=0x7fffffffdf08) at src/mongo/s/server.cpp:792 
+ */
 
 Status TransportLayerASIO::start() {
     stdx::unique_lock lk(_mutex);
@@ -886,8 +936,25 @@ ReactorHandle TransportLayerASIO::getReactor(WhichReactor which) {
     MONGO_UNREACHABLE;
 }
 
+/*
+ * 该函数用于在一个io_context对象上注册accept事件，accept事件发生后对应的handler为acceptCb
+ * 
+ * 注意，对于asio来说，构建一个acceptor对象，需要一个io_context对象以及ip:port信息。所以传入
+ * 的accpetor对象已经完成了对io_context对象和addr的绑定。
+ * 
+ * acceptCb的逻辑也非常简单：
+ * 1. 根据客户端的socket信息，新建一个ASIOSession对象，然后startSession
+ * 2. 继续注册accept事件
+ * 
+ * TODO：
+ * 2. ASIOSession与startSession
+ */
 void TransportLayerASIO::_acceptConnection(GenericAcceptor& acceptor) {
+    /*
+     * 这个lambda函数在listener线程中执行 
+     */
     auto acceptCb = [this, &acceptor](const std::error_code& ec, GenericSocket peerSocket) mutable {
+        /* 目测peerSocket表示客户端的socket信息 */
         if (auto lk = stdx::lock_guard(_mutex); _isShutdown) {
             return;
         }
@@ -910,6 +977,9 @@ void TransportLayerASIO::_acceptConnection(GenericAcceptor& acceptor) {
         _acceptConnection(acceptor);
     };
 
+    /*
+     * 参见：https://www.boost.org/doc/libs/1_66_0/doc/html/boost_asio/reference/basic_socket_acceptor/async_accept/overload4.html 
+     */
     acceptor.async_accept(*_ingressReactor, std::move(acceptCb));
 }
 

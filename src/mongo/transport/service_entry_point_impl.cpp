@@ -119,6 +119,9 @@ Status ServiceEntryPointImpl::start() {
         return Status::OK();
 }
 
+/*
+ * startSession被TransportLayerASIO::_acceptConnection调用
+ */
 void ServiceEntryPointImpl::startSession(transport::SessionHandle session) {
     // Setup the restriction environment on the Session, if the Session has local/remote Sockaddrs
     const auto& remoteAddr = session->remoteAddr();

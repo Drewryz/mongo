@@ -187,6 +187,9 @@ private:
     // state that is associated with the reactors), so that we destroy any existing acceptors or
     // other reactor associated state before we drop the refcount on the reactor, which may destroy
     // it.
+    /*
+     * ASIOReactor在transport_layer_asio.cpp中定义 
+     */
     std::shared_ptr<ASIOReactor> _ingressReactor;
     std::shared_ptr<ASIOReactor> _egressReactor;
     std::shared_ptr<ASIOReactor> _acceptorReactor;

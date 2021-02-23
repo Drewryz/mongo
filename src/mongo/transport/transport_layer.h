@@ -51,6 +51,9 @@ enum ConnectSSLMode { kGlobalSSLMode, kEnableSSL, kDisableSSL };
 class Reactor;
 using ReactorHandle = std::shared_ptr<Reactor>;
 
+/*
+ * TransportLayer包括了整个网络交互逻辑
+ */
 /**
  * The TransportLayer moves Messages between transport::Endpoints and the database.
  * This class owns an Acceptor that generates new endpoints from which it can
@@ -154,6 +157,9 @@ private:
     const size_t _id;
 };
 
+/*
+ * 这里的Reactor代表什么？为什么要命名为Reactor 
+ */
 class Reactor : public OutOfLineExecutor {
 public:
     Reactor(const Reactor&) = delete;
@@ -174,6 +180,7 @@ public:
 
     virtual bool onReactorThread() const = 0;
 
+    /* 将计时器连接到反应堆的事件循环中 */
     /*
      * Makes a timer tied to this reactor's event loop. Timeout callbacks will be
      * executed in a thread calling run() or runFor().
