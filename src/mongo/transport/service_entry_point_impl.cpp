@@ -121,6 +121,14 @@ Status ServiceEntryPointImpl::start() {
 
 /*
  * startSession被TransportLayerASIO::_acceptConnection调用
+ * 该函数主要流程：
+ * 1. 创建session对应的SSM
+ * 2. 如果已经接入的connection超过了配置的阈值，则拒绝接入
+ * 3. 设置连接结束后的清理函数setCleanupHook
+ * 4. 根据不同的owership，启动SSM
+ * 
+ * TODO:
+ * 2. ssm->start(ownership); 
  */
 void ServiceEntryPointImpl::startSession(transport::SessionHandle session) {
     // Setup the restriction environment on the Session, if the Session has local/remote Sockaddrs
@@ -131,11 +139,16 @@ void ServiceEntryPointImpl::startSession(transport::SessionHandle session) {
     RestrictionEnvironment::set(session, std::move(restrictionEnvironment));
 
     SSMListIterator ssmIt;
-
+    /*
+     * transport mode有两种：
+     * 1. kAsynchronous -- adaptive
+     * 2. synchronous -- synchronous
+     * transport mode 根据用户的配置而设置，参见TransportLayerManager::createWithConfig
+     */
     const bool quiet = serverGlobalParams.quiet.load();
     size_t connectionCount;
     auto transportMode = _svcCtx->getServiceExecutor()->transportMode();
-
+    /* 每一个session对象都对应一个ServiceStateMachine对象 */
     auto ssm = ServiceStateMachine::create(_svcCtx, session, transportMode);
     auto usingMaxConnOverride = false;
     {

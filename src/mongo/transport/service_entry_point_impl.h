@@ -85,6 +85,7 @@ private:
     mutable Mutex _sessionsMutex =
         MONGO_MAKE_LATCH(HierarchicalAcquisitionLevel(0), "ServiceEntryPointImpl::_sessionsMutex");
     stdx::condition_variable _shutdownCondition;
+    /* 记录了当前进程所有的ServiceStateMachine实例 */
     SSMList _sessions;
 
     size_t _maxNumConnections{DEFAULT_MAX_CONN};

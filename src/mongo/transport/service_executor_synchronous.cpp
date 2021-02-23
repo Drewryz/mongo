@@ -115,6 +115,7 @@ Status ServiceExecutorSynchronous::schedule(Task task,
     // into the thread local job queue.
     LOG(3) << "Starting new executor thread in passthrough mode";
 
+    /* 创建一个线程，并执行传入的lambda函数 */
     Status status = launchServiceWorkerThread([this, task = std::move(task)] {
         _numRunningWorkerThreads.addAndFetch(1);
 

@@ -161,6 +161,12 @@ class ServiceStateMachine::ThreadGuard {
     ThreadGuard& operator=(ThreadGuard&) = delete;
 
 public:
+    /*
+     * RAII，用于处理SSM相关的状态
+     * 1. 设置ssm的ownership
+     * 2. 以ssm记录的threadName为基准，设置当前线程的threadName  
+     * 3. 设置当前线程记录的current Client
+     */
     explicit ThreadGuard(ServiceStateMachine* ssm) : _ssm{ssm} {
         auto owned = Ownership::kUnowned;
         _ssm->_owned.compareAndSwap(&owned, Ownership::kOwned);
@@ -175,7 +181,9 @@ public:
         invariant(owned == Ownership::kUnowned);
         _ssm->_owningThread.store(stdx::this_thread::get_id());
 #endif
-
+        /*
+         * 以ssm记录的threadName为基准，设置当前线程的threadName 
+         */
         // Set up the thread name
         auto oldThreadName = getThreadName();
         if (oldThreadName != _ssm->_threadName) {
@@ -270,6 +278,7 @@ public:
 
 private:
     ServiceStateMachine* _ssm;
+    /* _haveTakenOwnership表示当前ThreadGuard对象是否持有相应的ssm */
     bool _haveTakenOwnership = false;
 };
 
@@ -554,6 +563,9 @@ void ServiceStateMachine::_runNextInGuard(ThreadGuard guard) {
     _cleanupSession(std::move(guard));
 }
 
+/*
+ * 状态机开始。由ServiceEntryPointImpl::startSession调用 
+ */
 void ServiceStateMachine::start(Ownership ownershipModel) {
     _scheduleNextWithGuard(ThreadGuard(this),
                            transport::ServiceExecutor::kEmptyFlags,
@@ -565,17 +577,35 @@ void ServiceStateMachine::setServiceExecutor(ServiceExecutor* executor) {
     _serviceExecutor = executor;
 }
 
+/*
+ * 根据线程模型的不同，会采用不同的调度方式，调度ssm下一个步骤
+ * 
+ * TODO: 
+ * 1. 两种executor的调度方式 
+ * 2. _serviceExecutor和SSM之间是一对一的关系吗？
+ *   应该是一对多的关系
+ */
 void ServiceStateMachine::_scheduleNextWithGuard(ThreadGuard guard,
                                                  transport::ServiceExecutor::ScheduleFlags flags,
                                                  transport::ServiceExecutorTaskName taskName,
                                                  Ownership ownershipModel) {
+
+    /* reading here. 2021-2-23-17:56 */
     auto func = [ssm = shared_from_this(), ownershipModel] {
         ThreadGuard guard(ssm.get());
         if (ownershipModel == Ownership::kStatic)
             guard.markStaticOwnership();
         ssm->_runNextInGuard(std::move(guard));
     };
+    /* ???? */
     guard.release();
+
+    /* reading here. 2021-2-23-20:03 */
+    /*
+     * 不同种类的service executor 会采用不同的调度方式：
+     * TODO：两种executor的调度方式
+     * 对于ServiceExecutorSynchronous
+     */
     Status status = _serviceExecutor->schedule(std::move(func), flags, taskName);
     if (status.isOK()) {
         return;

@@ -115,6 +115,10 @@ portLayerASIO::start()::<lambda()>; Args = {}; typename std::enable_if<(! std::i
 #31 0x00007fc9fe5fcdd5 in start_thread () from /lib64/libpthread.so.0
 #32 0x00007fc9fe32602d in clone () from /lib64/libc.so.6
  */
+/*
+ * 该函数既会被ServiceExecutorSynchronou调用，又会被ServiceExecutorAdaptive调用
+ * 整体说来这个函数创建一个新的线程，然后从task开始
+ */
 Status launchServiceWorkerThread(stdx::function<void()> task) {
 
     try {

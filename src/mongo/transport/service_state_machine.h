@@ -84,6 +84,7 @@ public:
      * Source -> SourceWait -> Process -> Source (fire-and-forget)
      */
     enum class State {
+        /* 初次运行ssm时，它的状态为Created，参见_runNextInGuard */
         Created,     // The session has been created, but no operations have been performed yet
         Source,      // Request a new Message from the network to handle
         SourceWait,  // Wait for the new Message to arrive from the network
@@ -94,6 +95,13 @@ public:
                      // state() if this is the current state.
     };
 
+    /*
+     * kOwned表示状态机的每个阶段可能会运行在不同的线程上，对于所有不同的线程，它们的名字将被设置为SSM->_threadName
+     * kStatic表示状态机与一个特定的线程绑定，因此SSM->_threadName只会初始化一次
+     * 上述过程参见：ServiceStateMachine::ThreadGuard
+     * 
+     * KOwned对应线程池模式，kStatic对应thread per connection模式
+     */
     /*
      * When start() is called with Ownership::kOwned, the SSM will swap the Client/thread name
      * whenever it runs a stage of the state machine, and then unswap them out when leaving the SSM.
