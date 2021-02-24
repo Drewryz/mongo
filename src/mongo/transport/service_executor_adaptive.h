@@ -46,6 +46,11 @@
 namespace mongo {
 namespace transport {
 
+
+/*
+ * TODO: reading here. 2021-2-24-19:53
+ * 自适应线程池模型。该对象在TransportLayerManager::createWithConfig函数中创建 
+ */
 /**
  * This is an ASIO-based adaptive ServiceExecutor. It guarantees that threads will not become stuck
  * or deadlocked longer that its configured timeout and that idle threads will terminate themselves

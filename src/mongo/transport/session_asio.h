@@ -348,6 +348,10 @@ private:
         return _socket;
     }
 
+    /*
+     * 从peer socket处读取数据，先读header，然后读MSG体。
+     * asio::read()可以读指定长度的packet，通过这种方式解决TCP粘包的问题 
+     */
     Future<Message> sourceMessageImpl(const BatonHandle& baton = nullptr) {
         static constexpr auto kHeaderSize = sizeof(MSGHEADER::Value);
 
@@ -460,6 +464,10 @@ private:
                 ec = asio::error::would_block;
             }
         } else {
+            /*
+             * 阻塞读取固定长度的数据到buffer中，参见：
+             * https://www.boost.org/doc/libs/1_66_0/doc/html/boost_asio/reference/read/overload1.html 
+             */
             size = asio::read(stream, buffers, ec);
         }
 

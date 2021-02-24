@@ -305,6 +305,15 @@ const transport::SessionHandle& ServiceStateMachine::_session() const {
     return _sessionHandle;
 }
 
+/*
+ * 从peer_socket处接收数据。
+ * 流程如下：
+ * 1. 先将当前状态机的状态置为SourceWait
+ * 2. 然后开始接收数据
+ * 3. 接收数据完成后会执行回调函数_sourceCallback
+ * TODO: 
+ * 1. 接收数据的细节
+ */
 void ServiceStateMachine::_sourceMessage(ThreadGuard guard) {
     invariant(_inMessage.empty());
     invariant(_state.load() == State::Source);
@@ -316,7 +325,9 @@ void ServiceStateMachine::_sourceMessage(ThreadGuard guard) {
     // the compressor for each incoming (i.e., sourced) message, and using the latest compressor id
     // for compressing the sink message.
     _compressorId = boost::none;
-
+    /*
+     * reading here. 2021-2-24-16:11 
+     */
     auto sourceMsgImpl = [&] {
         if (_transportMode == transport::Mode::kSynchronous) {
             MONGO_IDLE_THREAD_BLOCK;
@@ -357,6 +368,11 @@ void ServiceStateMachine::_sinkMessage(ThreadGuard guard, Message toSink) {
     sinkMsgImpl().getAsync([this](Status status) { _sinkCallback(std::move(status)); });
 }
 
+/*
+ * source操作完成后的回调函数
+ * 1. 如果source操作无异常，则将当前状态机状态置为Process, 然后_scheduleNextWithGuard  
+ * 2. 有异常则将状态置EndSession, 然后_runNextInGuard
+ */
 void ServiceStateMachine::_sourceCallback(Status status) {
     // The first thing to do is create a ThreadGuard which will take ownership of the SSM in this
     // thread.
@@ -522,6 +538,10 @@ void ServiceStateMachine::runNext() {
     return _runNextInGuard(ThreadGuard(this));
 }
 
+
+/*
+ * 根据状态机当前状态，执行对应的函数
+ */
 void ServiceStateMachine::_runNextInGuard(ThreadGuard guard) {
     auto curState = state();
     dassert(curState != State::Ended);

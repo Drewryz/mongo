@@ -78,6 +78,15 @@ Status ServiceExecutorSynchronous::shutdown(Milliseconds timeout) {
                  "passthrough executor couldn't shutdown all worker threads within time limit.");
 }
 
+
+/*
+ * synchronous executor的调度函数
+ * 当localWorkQueue为空时，会创建新的线程用于执行task, 如果不为空，则将task放置到队列中。
+ * 该函数的推进过程如下所示：
+ * 该函数会被ServiceStateMachine::_scheduleNextWithGuard函数调用，初始时_localWorkQueue为空，此时该函数会创建一个新的线程，
+ * 线程大致要从ServiceStateMachine::_runNextInGuard开始执行，_runNextInGuard在执行时，每个Stage的处理函数都会将状态机的状态
+ * 更改为下一个状态，然后继续调用_scheduleNextWithGuard函数，此时队列不为空，会将任务加入队列中，等待线程执行。
+ */
 Status ServiceExecutorSynchronous::schedule(Task task,
                                             ScheduleFlags flags,
                                             ServiceExecutorTaskName taskName) {
