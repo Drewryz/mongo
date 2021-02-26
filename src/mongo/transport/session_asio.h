@@ -282,6 +282,7 @@ protected:
         }
     }
 
+    /* 将socket设置成no-blocking的形式 */
     void ensureAsync() {
         if (_blockingMode == Async)
             return;
@@ -467,8 +468,13 @@ private:
             /*
              * 阻塞读取固定长度的数据到buffer中，参见：
              * https://www.boost.org/doc/libs/1_66_0/doc/html/boost_asio/reference/read/overload1.html 
+             * 注意：根据asio的文档，asio::read函数会阻塞，但是通过单步跟踪，发现当将stream设置为no-blocking的时候，asio::read不会阻塞
              */
             size = asio::read(stream, buffers, ec);
+            log() << size << " uiouio1";
+            if (ec == asio::error::try_again) {
+                log() << "uio!!!";
+            }
         }
 
         if (((ec == asio::error::would_block) || (ec == asio::error::try_again)) &&
@@ -488,7 +494,7 @@ private:
                         return opportunisticRead(stream, asyncBuffers, baton);
                     });
             }
-
+            log() << "zrzrzr";
             return asio::async_read(stream, asyncBuffers, UseFuture{}).ignoreValue();
         } else {
             return futurize(ec);

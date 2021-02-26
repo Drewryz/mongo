@@ -227,6 +227,7 @@ private:
 
     // These counters are used to detect stuck threads and high task queuing.
     AtomicWord<int> _threadsRunning{0};
+    /* 记录挂起的线程数量 */
     AtomicWord<int> _threadsPending{0};
     AtomicWord<int> _threadsInUse{0};
     AtomicWord<int> _tasksQueued{0};

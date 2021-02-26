@@ -313,6 +313,7 @@ const transport::SessionHandle& ServiceStateMachine::_session() const {
  * 3. 接收数据完成后会执行回调函数_sourceCallback
  * TODO: 
  * 1. 接收数据的细节
+ * 2. adaptive线程池模式如何接收数据
  */
 void ServiceStateMachine::_sourceMessage(ThreadGuard guard) {
     invariant(_inMessage.empty());
@@ -337,7 +338,9 @@ void ServiceStateMachine::_sourceMessage(ThreadGuard guard) {
             return _session()->asyncSourceMessage();
         }
     };
-
+    /*
+     * 猜测：这里对于adaptive模式来说，完全是异步读数据的，也就是说这个函数返回后数据并没有读到或者读完
+     */
     sourceMsgImpl().getAsync([this](StatusWith<Message> msg) {
         if (msg.isOK()) {
             _inMessage = std::move(msg.getValue());
@@ -602,8 +605,10 @@ void ServiceStateMachine::setServiceExecutor(ServiceExecutor* executor) {
  * 
  * TODO: 
  * 1. 两种executor的调度方式 
+ *    adaptive线程池模式： 
+ *    所谓的调度是指每次塞一个任务(lambda结构体)到队列中，等待worker执行, 那是不是可以这么说同一个连接的对于mongod/mongos的请求，可能由不同的线程执行完成？
  * 2. _serviceExecutor和SSM之间是一对一的关系吗？
- *   应该是一对多的关系
+ *    应该是一对多的关系
  */
 void ServiceStateMachine::_scheduleNextWithGuard(ThreadGuard guard,
                                                  transport::ServiceExecutor::ScheduleFlags flags,
@@ -625,6 +630,7 @@ void ServiceStateMachine::_scheduleNextWithGuard(ThreadGuard guard,
      * 不同种类的service executor 会采用不同的调度方式：
      * TODO：两种executor的调度方式
      * 对于ServiceExecutorSynchronous
+     * ServiceExecutorAdaptive::schedule
      */
     Status status = _serviceExecutor->schedule(std::move(func), flags, taskName);
     if (status.isOK()) {

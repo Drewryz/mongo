@@ -181,6 +181,10 @@ public:
     }
 
     void schedule(Task task) override {
+        /*
+         * 提交一个task，让io_context执行。关于asio::post参见：
+         * https://www.boost.org/doc/libs/1_66_0/doc/html/boost_asio/reference/io_context/post.html 
+         */
         asio::post(_ioContext, [task = std::move(task)] { task(Status::OK()); });
     }
 

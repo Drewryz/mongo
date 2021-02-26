@@ -73,7 +73,17 @@ int64_t ticksToMicros(TickSource::Tick ticks, TickSource* tickSource) {
 }
 
 struct ServerParameterOptions : public ServiceExecutorAdaptive::Options {
+    /*
+     * adaptiveServiceExecutorReservedThreads的值可以通过setParameter命令指定，
+     * 如果不指定的话，默认的值为当前机器cpu核心数的一半
+     */
     int reservedThreads() const final {
+        /*
+         * TODO: adaptiveServiceExecutorReservedThreads是怎么配置的 
+         * 不能通过文件配置，必须通过setParameter配置
+         * TOOD: 那通过setParameter方式配置的参数是如何生效的呢
+         * 目测在parameters.cpp:errmsgRun()设置
+         */
         int value = adaptiveServiceExecutorReservedThreads.load();
         if (value == -1) {
             value = ProcessInfo::getNumAvailableCores() / 2;
@@ -86,6 +96,7 @@ struct ServerParameterOptions : public ServiceExecutorAdaptive::Options {
     }
 
     Milliseconds workerThreadRunTime() const final {
+        /* 工作线程从全局队列中获取任务执行，如果队列中没有任务则需要等待，该配置就是限制等待时间的最大值 */
         return Milliseconds{adaptiveServiceExecutorRunTimeMillis.load()};
     }
 
@@ -140,10 +151,24 @@ ServiceExecutorAdaptive::~ServiceExecutorAdaptive() {
     invariant(!_isRunning.load());
 }
 
+/*
+ * executor的启动函数，该函数在mongos/mongod启动的时候被调用，调用栈如下：
+#0  mongo::transport::ServiceExecutorAdaptive::start (this=0x7ffff20118e0) at src/mongo/transport/service_executor_adaptive.cpp:145
+#1  0x000055555703ade6 in mongo::(anonymous namespace)::runMongosServer (serviceContext=0x7ffff1da6c60) at src/mongo/s/server.cpp:602
+#2  0x000055555703b774 in mongo::(anonymous namespace)::main (serviceContext=0x7ffff1da6c60) at src/mongo/s/server.cpp:689
+#3  0x000055555703bade in mongo::(anonymous namespace)::mongoSMain (argc=3, argv=0x7fffffffdea8, envp=0x7fffffffdec8) at src/mongo/s/server.cpp:764
+#4  0x000055555703be37 in main (argc=3, argv=0x7fffffffdea8, envp=0x7fffffffdec8) at src/mongo/s/server.cpp:792 
+ * 
+ * TODO
+ * 1. _controllerThreadRoutine
+ */
 Status ServiceExecutorAdaptive::start() {
     invariant(!_isRunning.load());
     _isRunning.store(true);
     _controllerThread = stdx::thread(&ServiceExecutorAdaptive::_controllerThreadRoutine, this);
+    /*
+     * 通过reservedThreads函数获取初始的worker数目 
+     */
     for (auto i = 0; i < _config->reservedThreads(); i++) {
         _startWorkerThread(ThreadCreationReason::kReserveMinimum);
     }
@@ -224,6 +249,12 @@ Status ServiceExecutorAdaptive::schedule(ServiceExecutorAdaptive::Task task,
         (_localThreadState->recursionDepth + 1 < _config->recursionLimit())) {
         _reactorHandle->dispatch(std::move(wrappedTask));
     } else {
+        /*
+         * 这里的reactor是_ingressReactor，参考TransportLayerManager::createWithConfig
+         * _ingressReactor包含所有的已经被接收的socket和所有入口网络activity 
+         * _ingressReactor的类型是TransportLayerASIO::ASIOReactor类型，定义在transport_layer_asio.cpp中
+         * schedule将wrappedTask注册到_reactorHandle后立刻返回，真正执行task的是worker线程，参见_workerThreadRoutine
+         */
         _reactorHandle->schedule(std::move(wrappedTask));
     }
 
@@ -427,6 +458,12 @@ void ServiceExecutorAdaptive::_controllerThreadRoutine() {
     }
 }
 
+/*
+ * 启动worker线程，worker线程的入口函数为_workerThreadRoutine
+ * TODO:
+ * _workerThreadRoutine 
+ */
+/* TODO: reading here. 2021-2-25:12:06 */
 void ServiceExecutorAdaptive::_startWorkerThread(ThreadCreationReason reason) {
     stdx::unique_lock<Latch> lk(_threadsMutex);
     auto it = _threads.emplace(_threads.begin(), _tickSource);
@@ -434,10 +471,14 @@ void ServiceExecutorAdaptive::_startWorkerThread(ThreadCreationReason reason) {
 
     _threadsPending.addAndFetch(1);
     _threadsRunning.addAndFetch(1);
+    /*
+     *  _threadStartCounters是一个静态数组，数组的索引记录了线程被创建的原因，对应的值表示线程的数目
+     */
     _threadStartCounters[static_cast<size_t>(reason)] += 1;
 
     lk.unlock();
 
+    /* 创建新的线程，从_workerThreadRoutine开始执行 */
     const auto launchResult =
         launchServiceWorkerThread([this, num, it] { _workerThreadRoutine(num, it); });
 
@@ -519,6 +560,11 @@ TickSource::Tick ServiceExecutorAdaptive::_getThreadTimerTotal(
     return accumulator;
 }
 
+/*
+ * worker线程的主函数。
+ * TODO:
+ * 1._getThreadJitter  
+ */
 void ServiceExecutorAdaptive::_workerThreadRoutine(
     int threadId, ServiceExecutorAdaptive::ThreadList::iterator state) {
     _threadsPending.subtractAndFetch(1);
@@ -530,6 +576,10 @@ void ServiceExecutorAdaptive::_workerThreadRoutine(
 
     log() << "Started new database worker thread " << threadId;
 
+    /*
+     * 注册线程退出时的清理函数，也就是当线程离开_workerThreadRoutine函数时，
+     * 会执行这个lambda函数。
+     */
     bool guardThreadsRunning = true;
     const auto guard = makeGuard([this, &guardThreadsRunning, state] {
         if (guardThreadsRunning)
@@ -547,12 +597,16 @@ void ServiceExecutorAdaptive::_workerThreadRoutine(
 
     auto jitter = _getThreadJitter();
 
+    /*
+     * 接连不断地从队列中获取任务执行，获取任务的等待时间为runTime 
+     */
     while (_isRunning.load()) {
         // We don't want all the threads to start/stop running at exactly the same time, so the
         // jitter setParameter adds/removes a random small amount of time to the runtime.
         Milliseconds runTime = _config->workerThreadRunTime() + jitter;
         dassert(runTime.count() > 0);
 
+        /* executingCurRun表示worker线程实际干活的时间 */
         // Reset ticksSpentExecuting timer
         state->executingCurRun = 0;
 
@@ -560,7 +614,8 @@ void ServiceExecutorAdaptive::_workerThreadRoutine(
         // know that it's okay to start adding threads to avoid starvation again.
         state->running.markRunning();
         _reactorHandle->runFor(runTime);
-
+        
+        /* spentRuning表示线程从进入runFor开始，到runFor结束，总共使用了多少时间，这表示总共花了多少时间(包括睡眠时间)执行完当前任务 */
         auto spentRunning = state->running.markStopped();
 
         // If we spent less than our idle threshold actually running tasks then exit the thread.

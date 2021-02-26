@@ -190,6 +190,7 @@ private:
     /*
      * ASIOReactor在transport_layer_asio.cpp中定义 
      */
+    /* 入口reactor */
     std::shared_ptr<ASIOReactor> _ingressReactor;
     std::shared_ptr<ASIOReactor> _egressReactor;
     std::shared_ptr<ASIOReactor> _acceptorReactor;
